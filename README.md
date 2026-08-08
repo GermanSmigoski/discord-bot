@@ -45,6 +45,7 @@ Antes de ejecutar el bot, asegúrate de tener instalado lo siguiente:
    DISCORD_TOKEN=TuTokenDeDiscordAqui
    ```
    > **Nota:** Recuerda activar el **Message Content Intent** en el portal de desarrolladores de Discord (Discord Developer Portal -> Bot -> Privileged Gateway Intents).
+   > Para una guia paso a paso sobre como crear el bot y obtener el token, consulta el archivo [BOT_SETUP.md](file:///c:/Users/germi/OneDrive/Escritorio/germi-portfolio/discord-music-bot/BOT_SETUP.md).
 
 ---
 
