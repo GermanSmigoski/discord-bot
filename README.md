@@ -64,18 +64,18 @@ El prefijo por defecto es `!`. Los comandos disponibles en el chat son:
 Cuando reproduces una canción, el bot enviará un panel interactivo con los siguientes controles mediante botones:
 
 ### Fila 1 (Controles de reproducción):
-- `🔉` **Down**: Baja el volumen del bot.
-- `⏮️` **Back**: Vuelve a reproducir la canción anterior desde el historial.
-- `⏯️` **Resume**: Pausa o reanuda la música.
-- `⏭️` **Skip**: Salta a la siguiente canción en la cola.
-- `🔊` **Up**: Sube el volumen del bot.
+- **Down**: Baja el volumen del bot.
+- **Back**: Vuelve a reproducir la canción anterior desde el historial.
+- **Resume**: Pausa o reanuda la música.
+- **Skip**: Salta a la siguiente canción en la cola.
+- **Up**: Sube el volumen del bot.
 
 ### Fila 2 (Controles de Cola y Modos):
-- `🔀` **Shuffle**: Mezcla aleatoriamente el orden de las canciones en la cola.
-- `🔁` **Loop**: Repite la canción actual en bucle.
-- `⏹️` **Stop**: Detiene la música, vacía la cola y desconecta el bot.
-- `🔄` **AutoPlay**: Continúa reproduciendo música automáticamente.
-- `📑` **Playlist**: Muestra una ventana efímera con las próximas 10 canciones en la cola.
+- **Shuffle**: Mezcla aleatoriamente el orden de las canciones en la cola.
+- **Loop**: Repite la canción actual en bucle.
+- **Stop**: Detiene la música, vacía la cola y desconecta el bot.
+- **AutoPlay**: Continúa reproduciendo música automáticamente.
+- **Playlist**: Muestra una ventana efímera con las próximas 10 canciones en la cola.
 
 ### Fila 3 (Gestión de Cola):
-- `🗑️` **Vaciar Lista**: Elimina todas las canciones de la lista de reproducción de forma rápida.
+- **Vaciar Lista**: Elimina todas las canciones de la lista de reproducción de forma rápida.
