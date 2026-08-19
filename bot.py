@@ -39,6 +39,16 @@ autoplay_modes = {}
 # Sin esto la extraccion funciona a medias: "Signature solving failed, some formats may be missing".
 REMOTE_COMPONENTS = ['ejs:github']
 
+# YouTube exige PO tokens para entregar el audio: sin ellos la extraccion anda
+# pero la URL devuelve 403. Los genera el servicio bgutil-provider del compose.
+POT_PROVIDER_URL = os.getenv('POT_PROVIDER_URL', 'http://bgutil-provider:4416')
+# El cliente por defecto (android_vr) no usa PO tokens y sus URLs dan 403.
+# web_music si los aprovecha y devuelve URLs que ffmpeg puede abrir.
+EXTRACTOR_ARGS = {
+    'youtubepot-bgutilhttp': {'base_url': [POT_PROVIDER_URL]},
+    'youtube': {'player_client': ['web_music']},
+}
+
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extract_flat': 'in_playlist',
@@ -48,6 +58,7 @@ YTDL_OPTIONS = {
     'no_warnings': True,
     'default_search': 'ytsearch',
     'remote_components': REMOTE_COMPONENTS,
+    'extractor_args': EXTRACTOR_ARGS,
 }
 
 # Para reproducir hace falta la URL real del audio, asi que aca no se usa extract_flat.
@@ -56,6 +67,7 @@ YTDL_PLAYBACK_OPTIONS = {
     'quiet': True,
     'default_search': 'ytsearch',
     'remote_components': REMOTE_COMPONENTS,
+    'extractor_args': EXTRACTOR_ARGS,
 }
 
 VOICE_CONNECT_TIMEOUT = 60.0

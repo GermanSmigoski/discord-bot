@@ -1,4 +1,5 @@
 discord.py[voice]
 yt-dlp
+bgutil-ytdlp-pot-provider
 python-dotenv
 requests

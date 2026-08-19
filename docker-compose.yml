@@ -1,7 +1,17 @@
 services:
+  # YouTube exige PO tokens para servir el audio. Este servicio los genera
+  # y yt-dlp se los pide por HTTP; evita tener que usar cookies de una cuenta real.
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: bgutil-provider
+    init: true
+    restart: unless-stopped
+
   bot:
     build: .
     container_name: discord-music-bot
     env_file:
       - .env
+    depends_on:
+      - bgutil-provider
     restart: unless-stopped
