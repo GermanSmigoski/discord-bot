@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import traceback
 import html
 import json
 import random
@@ -33,6 +34,11 @@ now_playing_messages = {}
 loop_modes = {}
 autoplay_modes = {}
 
+# YouTube ofusca las URLs de audio con challenges de JavaScript. yt-dlp los resuelve
+# con deno (instalado en la imagen) mas un script solucionador que baja de GitHub.
+# Sin esto la extraccion funciona a medias: "Signature solving failed, some formats may be missing".
+REMOTE_COMPONENTS = ['ejs:github']
+
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extract_flat': 'in_playlist',
@@ -41,12 +47,58 @@ YTDL_OPTIONS = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'ytsearch',
+    'remote_components': REMOTE_COMPONENTS,
 }
+
+# Para reproducir hace falta la URL real del audio, asi que aca no se usa extract_flat.
+YTDL_PLAYBACK_OPTIONS = {
+    'format': 'bestaudio',
+    'quiet': True,
+    'default_search': 'ytsearch',
+    'remote_components': REMOTE_COMPONENTS,
+}
+
+VOICE_CONNECT_TIMEOUT = 60.0
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
+
+ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+MAX_FALLOS_SEGUIDOS = 3
+fallos_seguidos = {}
+
+def describe_error(exc):
+    """Traduce una excepcion a un texto corto y entendible para mandar al chat."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return "se agoto el tiempo de espera"
+    if isinstance(exc, discord.Forbidden):
+        return "me faltan permisos en este canal"
+    if isinstance(exc, yt_dlp.utils.DownloadError):
+        detalle = ANSI_RE.sub('', str(exc))
+        detalle = detalle.replace('ERROR: ', '').strip()
+        if 'Sign in to confirm' in detalle or ('bot' in detalle.lower() and 'confirm' in detalle.lower()):
+            return "YouTube pide verificacion (nos detecto como bot)"
+        if 'Video unavailable' in detalle:
+            return "el video no esta disponible"
+        if 'Private video' in detalle:
+            return "el video es privado"
+        if 'age' in detalle.lower() and 'restrict' in detalle.lower():
+            return "el video tiene restriccion de edad"
+        return f"yt-dlp fallo: {detalle[:200]}"
+    if isinstance(exc, requests.RequestException):
+        return f"fallo la conexion a internet: {type(exc).__name__}"
+
+    detalle = str(exc).strip()
+    detalle = ANSI_RE.sub('', detalle)[:200]
+    return f"{type(exc).__name__}: {detalle}" if detalle else type(exc).__name__
+
+def log_error(contexto, exc):
+    """Deja el traceback completo en los logs del contenedor."""
+    print(f"[ERROR] {contexto}: {describe_error(exc)}", flush=True)
+    traceback.print_exception(type(exc), exc, exc.__traceback__)
 
 def format_duration(seconds):
     if not seconds:
@@ -156,6 +208,18 @@ class MusicPanelControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.ctx = ctx
         self.guild_id = guild_id
+
+    async def on_error(self, interaction, error, item):
+        """Un boton que explota sin esto no muestra nada al usuario."""
+        log_error(f"boton '{getattr(item, 'label', item)}' del panel", error)
+        mensaje = f"❌ Fallo el boton **{getattr(item, 'label', 'del panel')}**: `{describe_error(error)}`"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(mensaje, ephemeral=True)
+            else:
+                await interaction.response.send_message(mensaje, ephemeral=True)
+        except Exception as envio_err:
+            log_error("avisando del fallo de un boton", envio_err)
 
     # FILA 0
     @discord.ui.button(label="Down", style=discord.ButtonStyle.secondary, emoji="🔉", row=0)
@@ -308,7 +372,7 @@ async def play_next(ctx, guild_id):
             loop = asyncio.get_event_loop()
             
             def fetch_yt_info():
-                with yt_dlp.YoutubeDL({'format': 'bestaudio', 'quiet': True, 'default_search': 'ytsearch'}) as ytdl:
+                with yt_dlp.YoutubeDL(YTDL_PLAYBACK_OPTIONS) as ytdl:
                     info = ytdl.extract_info(track['query'], download=False)
                     if 'entries' in info and len(info['entries']) > 0:
                         return info['entries'][0]
@@ -337,7 +401,10 @@ async def play_next(ctx, guild_id):
 
             def after_playing(error):
                 if error:
-                    print(f"Error en reproducción: {error}")
+                    log_error('durante la reproduccion', error)
+                    bot.loop.create_task(
+                        ctx.send(f"⚠️ Se corto la reproduccion: `{describe_error(error)}`")
+                    )
                 bot.loop.create_task(play_next(ctx, guild_id))
 
             ffmpeg_source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
@@ -345,9 +412,26 @@ async def play_next(ctx, guild_id):
             volume_source = discord.PCMVolumeTransformer(ffmpeg_source, volume=curr_vol)
 
             voice_client.play(volume_source, after=after_playing)
+            fallos_seguidos[guild_id] = 0
 
         except Exception as e:
-            print(f"Error al reproducir pista: {e}")
+            log_error(f"reproduciendo '{track.get('title', track.get('query'))}'", e)
+
+            fallos = fallos_seguidos.get(guild_id, 0) + 1
+            fallos_seguidos[guild_id] = fallos
+
+            titulo = track.get('title', 'esa cancion')
+            aviso = await ctx.send(f"⚠️ No pude reproducir **{titulo}**: `{describe_error(e)}`")
+            asyncio.create_task(delete_after(aviso, 15))
+
+            if fallos >= MAX_FALLOS_SEGUIDOS:
+                fallos_seguidos[guild_id] = 0
+                queues[guild_id] = []
+                return await ctx.send(
+                    f"❌ Fallaron {MAX_FALLOS_SEGUIDOS} canciones seguidas, asi que corto la cola.\n"
+                    f"El detalle completo esta en los logs: `docker compose logs --tail 50`"
+                )
+
             await play_next(ctx, guild_id)
     else:
         if guild_id in now_playing_messages:
@@ -364,16 +448,59 @@ async def on_ready():
     print(f"Bot listo y conectado en Python como: {bot.user}")
     print(f"========================================\n")
 
+    # Si Discord cree que seguimos en un canal de voz pero no tenemos cliente,
+    # quedo una sesion colgada de una ejecucion anterior: hay que limpiarla.
+    for guild in bot.guilds:
+        if guild.me.voice and not guild.voice_client:
+            await clear_ghost_voice_state(guild)
+
+async def clear_ghost_voice_state(guild):
+    """Le avisa a Discord que el bot no esta en ningun canal de voz de este server.
+
+    Si el proceso se corta sin desconectarse (por ejemplo al reiniciar el contenedor),
+    Discord deja la sesion de voz colgada y los intentos de reconectar se quedan
+    esperando el VOICE_SERVER_UPDATE hasta que salta el timeout.
+    """
+    try:
+        await guild.change_voice_state(channel=None)
+        await asyncio.sleep(1)
+    except Exception:
+        pass
+
+async def ensure_voice_client(guild, voice_channel):
+    """Devuelve un voice client conectado a voice_channel, reusando el actual si sirve."""
+    voice_client = guild.voice_client
+
+    if voice_client and voice_client.is_connected():
+        if voice_client.channel != voice_channel:
+            await voice_client.move_to(voice_channel)
+        return voice_client
+
+    if voice_client:
+        await voice_client.disconnect(force=True)
+
+    try:
+        return await voice_channel.connect(self_deaf=True, timeout=VOICE_CONNECT_TIMEOUT)
+    except asyncio.TimeoutError:
+        await clear_ghost_voice_state(guild)
+        return await voice_channel.connect(self_deaf=True, timeout=VOICE_CONNECT_TIMEOUT)
+
 @bot.command(name='play')
 async def play(ctx, *, url_or_name: str):
     if not ctx.author.voice:
         return await ctx.send("❌ ¡Debes estar en un canal de voz!")
 
     voice_channel = ctx.author.voice.channel
-    voice_client = ctx.guild.voice_client
 
-    if not voice_client:
-        voice_client = await voice_channel.connect(self_deaf=True)
+    permissions = voice_channel.permissions_for(ctx.guild.me)
+    if not permissions.connect or not permissions.speak:
+        return await ctx.send("❌ No tengo permisos para conectarme o hablar en ese canal de voz.")
+
+    try:
+        voice_client = await ensure_voice_client(ctx.guild, voice_channel)
+    except asyncio.TimeoutError:
+        await clear_ghost_voice_state(ctx.guild)
+        return await ctx.send("❌ No pude conectarme al canal de voz. Proba de nuevo en unos segundos.")
 
     guild_id = ctx.guild.id
     if guild_id not in queues:
@@ -490,5 +617,31 @@ async def delete_after(msg, seconds):
         await msg.delete()
     except Exception:
         pass
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Ultimo filtro: cualquier error no manejado se avisa en el chat, no solo en los logs."""
+    if isinstance(error, commands.CommandNotFound):
+        return
+
+    if isinstance(error, commands.MissingRequiredArgument):
+        return await ctx.send(
+            f"❌ Te falto un dato (`{error.param.name}`). Ejemplo: `!play nombre o enlace`"
+        )
+
+    if isinstance(error, commands.CommandOnCooldown):
+        return await ctx.send(f"⏳ Esperá {error.retry_after:.0f}s antes de repetir ese comando.")
+
+    # CommandInvokeError envuelve al error real que tiró el comando
+    original = getattr(error, "original", error)
+    log_error(f"comando !{ctx.command}", original)
+
+    try:
+        await ctx.send(
+            f"❌ Error en `!{ctx.command}`: `{describe_error(original)}`\n"
+            f"Detalle completo: `docker compose logs --tail 50`"
+        )
+    except Exception as envio_err:
+        log_error("avisando de un error en el chat", envio_err)
 
 bot.run(TOKEN)
